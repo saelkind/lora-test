@@ -1,2 +1,2 @@
 # lora-test
-LoRa and LoRaWAN client test applications
+##LoRa and LoRaWAN client test applications

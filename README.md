@@ -5,7 +5,7 @@ Various test apps for LoRa testing, and LoRaWAN Things Stack (TTN v3) clients.  
 
 ### Projects
 * Simple LoRa test transceiver
-  * tested with LilyGo TTG ESP32 LoRa 915MHz, with OLED display
+  * tested with LilyGo TTGO ESP32 LoRa 915MHz, with OLED display
   * Started with the Transmitter and Receiver projects from https://github.com/YogoGit/TTGO-LORA32-V1.0.
    Combined them together, to make transceivers that send and receive the test packets.  Among the
    changes:

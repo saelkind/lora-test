@@ -29,9 +29,10 @@
 #define OLED_SCL    15
 #define OLED_RST    16
 #define DELAY_TIME  10
-#define MAX_PACKET_LEN 15
+#define MAX_PACKET_LEN 12
 #define MAX_POLLS_PER_CYLE 120
 #define POLL_DELAY 50
+#define NO_DATA_FLAG -999
 
 #define SCK     5    // GPIO5  -- SX1278's SCK
 #define MISO    19   // GPIO19 -- SX1278's MISO
@@ -46,8 +47,8 @@ SSD1306 display(0x3c, OLED_SDA, OLED_SCL);
 void showLogo();
 void displayLoraData(int sentCounter, int rcvdCounter, int packSize, char* packet, int rssi);
 
-int rssi = -99;
-int packSize = -99;
+int rssi = NO_DATA_FLAG;
+int packSize = NO_DATA_FLAG;
 int sentCounter = 0;
 int rcvdCounter = 0;
 char dispBuffer[128]; 
@@ -127,7 +128,7 @@ void loop() {
     Serial.print(", on poll #");
     Serial.println(rcvPollCount);
     for (int i = 0; i < packetSize; i++) {
-        if (i < MAX_PACKET_LEN) {
+        if (i < (MAX_PACKET_LEN)) {
           packet[i] = (char)LoRa.read();
           //Serial.print("Read byte ");
           //Serial.println(i);
@@ -135,6 +136,9 @@ void loop() {
         else {
           LoRa.read(); // into bit bucket
         }
+      }
+      if(packetSize > (MAX_PACKET_LEN)) {
+        packetSize = MAX_PACKET_LEN;
       }
       packet[packetSize] = '\0';
       rssi = LoRa.packetRssi();
@@ -161,7 +165,7 @@ void displayLoraData(int sentCounter, int rcvdCounter, int packSize, char* packe
   sprintf(dispBuffer, "Sending pkt: %d", sentCounter);
   //Serial.println(dispBuffer);
   display.drawString(0, 0, dispBuffer);
-  if (packSize == -99) {
+  if (packSize == NO_DATA_FLAG) {
     sprintf(dispBuffer, "Last pkt rcvd bytes: <n/a>");
   }
   else {
@@ -175,7 +179,7 @@ void displayLoraData(int sentCounter, int rcvdCounter, int packSize, char* packe
   sprintf(dispBuffer, "last pkt: \"%s\"", packet);
   display.drawStringMaxWidth(0 , 33 , 128, dispBuffer);
   //Serial.println(dispBuffer);
-  if (rssi == -99) {
+  if (rssi == NO_DATA_FLAG) {
     sprintf(dispBuffer, "Last RSSI: <n/a>");
   }
   else {

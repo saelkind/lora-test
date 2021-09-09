@@ -3,22 +3,32 @@
 #include <SSD1306.h>
 #include <LoRa.h>
 #include "images.h"
+#ifdef ESP32
+  #include <WiFi.h>
+#endif
 
-
+#define VERSION "1.0.0"
 /*
  * Started with the Transmitter and Receiver projects from https://github.com/YogoGit/TTGO-LORA32-V1.0.
  * Combined them together, to make transceivers that send and receive the test packets.  Among the
- * chnages:
+ * changes:
  * - replace String objects with char arrays to preclude possibility of memory leaks over the long term
  *   (e.g., 24+ hour runtime)
- * - modfied timing to allow receiving of the majority of packets by any device (remember SX1276 only
- *   receives or tansmits at any one time, so we WILL miss some packets while transmitting).
+ * - modfied timing to allow receiving of a higher proportion of packets by any device (remember SX1276 
+ *   only receives or tansmits at any one time, so we WILL miss some packets while transmitting).
  * - modified display to show both send and received stats simultaneously, updated both on packet
- *   transmit and receive (twice per look).
+ *   transmit and receive (twice per loop).
+ * - use random poll delay seeded by ESP32 WiFi MAC address, to make sure the two transceivers can't
+ *   get stuck in lockstep.  Observationally, the timings I used here seem to result in 50-60% +/- an
+ *   elephant packet loss over the long term
  * - uses the same two libraries referenced in the YoGoGit project
- * - TODO - look for blocing recieve in the ardhuino LoRa library
+ * - TODO - Look int using receive callbacks instead of single receive to prevent packet trashing when
+ *   a new packet comes in while doing a parsePacket()
+ * - TODO - if new packet received during parsePacket(), may also be able to use to reduce packet loss if
+ *   user lower transmission rate.
  * - TODO - when I have the time, modify this project or make a new project based on this that provides
- *   ack and retransmit so that no packets are lost.
+ *   ack and retransmit so that no packets are lost.  Maybe change to a "Ping-Pong" pair if you will.
+ *   nothing too fancy, this is just a test app, not a bullet-proof prod deployment.
  */
 
 //#define LORA_BAND    433
@@ -28,10 +38,13 @@
 #define OLED_SDA    4
 #define OLED_SCL    15
 #define OLED_RST    16
-#define DELAY_TIME  10
 #define MAX_PACKET_LEN 12
-#define MAX_POLLS_PER_CYLE 120
-#define POLL_DELAY 50
+#define MAX_POLLS_PER_CYLE 50
+#define POLL_DELAY_MIN 67
+#define POLL_DELAY_MAX 83
+#define MAX_XMIT_RETRIES 5
+#define XMIT_RETRY_TIME  10
+#define XMIT_LED_DELAY 40
 #define NO_DATA_FLAG -999
 
 #define SCK     5    // GPIO5  -- SX1278's SCK
@@ -46,6 +59,8 @@ SSD1306 display(0x3c, OLED_SDA, OLED_SCL);
 // Forward declarations
 void showLogo();
 void displayLoraData(int sentCounter, int rcvdCounter, int packSize, char* packet, int rssi);
+int generatePollDelay();
+void printMacAddrFromArray(byte macAddr[6]);
 
 int rssi = NO_DATA_FLAG;
 int packSize = NO_DATA_FLAG;
@@ -53,12 +68,15 @@ int sentCounter = 0;
 int rcvdCounter = 0;
 char dispBuffer[128]; 
 char packet[MAX_PACKET_LEN+1];
+long seed = 999;
+unsigned long pollDelayTime;
 
 void setup() {
   Serial.begin(115200);
   while (!Serial);
   Serial.println();
-  Serial.println("LoRa Transceiver");
+  Serial.print("LoRa Transceiver ");
+  Serial.println(VERSION);
 
   // Configure the LED an an output
   pinMode(LED_BUILTIN, OUTPUT);
@@ -80,10 +98,31 @@ void setup() {
   display.clear();
   display.setFont(ArialMT_Plain_16);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.drawString(display.getWidth() / 2, display.getHeight() / 2, "LoRa Transceiver");
+  char dispBuff[30];
+  sprintf(dispBuff, "v%s", VERSION);
+  display.drawString(display.getWidth() / 2, 22, "LoRa Transceiver");
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(display.getWidth() / 2, 42, dispBuff);
   display.display();
   delay(2000);
 
+#ifdef ESP32
+  Serial.println("Generating random poll delay seed from MAC");
+  Serial.println("ESP Board MAC Address:  ");
+  seed = 0;
+  byte wiFiMacAddr[6];
+  WiFi.macAddress(wiFiMacAddr);
+  for (int i=0; i < 6; i++) {
+    seed += wiFiMacAddr[i];
+  }
+  Serial.println(WiFi.macAddress());
+#endif
+  
+  Serial.print("Seeing random number generator, seed: ");
+  Serial.println(seed);
+  randomSeed(seed);
+  pollDelayTime = (unsigned long)random(POLL_DELAY_MIN, POLL_DELAY_MAX);
+  
   // Configure the LoRA radio
   SPI.begin(SCK, MISO, MOSI, SS);
   LoRa.setPins(SS, RST, DI0);
@@ -99,8 +138,22 @@ void setup() {
 void loop() {
 
   // send packet
+
+  // toggle the led to give a visual indication the packet is being sent
+  digitalWrite(LED_BUILTIN, HIGH);
+  unsigned long int xmitTime = millis();
   Serial.println("Sending packet");
-  LoRa.beginPacket();
+
+  int retries = 0;
+  // retries probably not necessary in non-callback mode?
+  while (retries < MAX_XMIT_RETRIES) {
+    if (LoRa.beginPacket()) {
+      break;
+    }
+    Serial.print("*** Retry xmit begin #");
+    Serial.println(++retries);
+    delay(XMIT_RETRY_TIME);
+  }
   LoRa.print("hello ");
   LoRa.print(sentCounter);
   LoRa.endPacket();
@@ -108,10 +161,13 @@ void loop() {
   Serial.println(dispBuffer);
 
   displayLoraData(sentCounter, rcvdCounter, packSize, packet, rssi);
-
-  // toggle the led to give a visual indication the packet was sent
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(150);
+  xmitTime = millis() - xmitTime;
+  Serial.print("Xmit time (ms): ");
+  Serial.println(xmitTime);
+  if (xmitTime < XMIT_LED_DELAY) {
+    delay(XMIT_LED_DELAY - xmitTime);
+  }
+  //delay(XMIT_LED_DELAY);
   digitalWrite(LED_BUILTIN, LOW);
   sentCounter++;
 
@@ -130,8 +186,6 @@ void loop() {
     for (int i = 0; i < packetSize; i++) {
         if (i < (MAX_PACKET_LEN)) {
           packet[i] = (char)LoRa.read();
-          //Serial.print("Read byte ");
-          //Serial.println(i);
         }
         else {
           LoRa.read(); // into bit bucket
@@ -148,12 +202,15 @@ void loop() {
       displayLoraData(sentCounter, rcvdCounter, packSize, packet, rssi);
     }
     rcvPollCount++;
-    delay(POLL_DELAY);
+    // want to delay a little after receipt as well, to let other side start
+    // polling after xmit
+    delay(pollDelayTime);
   }
   if (packetSize == 0) {
     Serial.println("No packet received during polls");
   }
-  delay(DELAY_TIME);
+  pollDelayTime = genPollDelay();  
+  //delay(delayTime);
 }
 
 void displayLoraData(int sentCounter, int rcvdCounter, int packSize, char* packet, int rssi) {
@@ -180,10 +237,10 @@ void displayLoraData(int sentCounter, int rcvdCounter, int packSize, char* packe
   display.drawStringMaxWidth(0 , 33 , 128, dispBuffer);
   //Serial.println(dispBuffer);
   if (rssi == NO_DATA_FLAG) {
-    sprintf(dispBuffer, "Last RSSI: <n/a>");
+    sprintf(dispBuffer, "Last RSSI: <n/a>      v%s", VERSION);
   }
   else {
-     sprintf(dispBuffer, "Last RSSI: %d", rssi);
+     sprintf(dispBuffer, "Last RSSI: %d        v%s", rssi, VERSION);
   }                     
   display.drawString(0, 44, dispBuffer);
   //Serial.println(dispBuffer);
@@ -199,3 +256,22 @@ void showLogo() {
   display.drawXbm(x_off, y_off, logo_width, logo_height, logo_bits);
   display.display();
 }
+
+unsigned long genPollDelay() {
+  unsigned long pollDelayTime = (unsigned long)random(POLL_DELAY_MIN, POLL_DELAY_MAX);
+  Serial.print("Next poll delay time (ms): ");
+  Serial.println(pollDelayTime);
+  return pollDelayTime;
+}
+
+/* for debugging.
+void printMacAddrFromArray(byte macAddr[6]) {
+  char addrByteStr[8] {'M', 'A', 'C', '[', 0x00, ']', ':', 0x00};
+  Serial.println();
+  for (int i=0; i < 6; i++) {
+    addrByteStr[4] = (byte)i + 48;
+    Serial.print (addrByteStr);
+    Serial.println(macAddr[i]);
+  }
+}
+*/

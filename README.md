@@ -5,6 +5,9 @@ Various test apps for LoRa testing.  For now, only Arduino IDE-based projects.
 
 ### Project
 * Simple LoRa test transceiver (Arduino framework)
+
+  Useful for things like testing out boards for LoRa functionality, signal strength 
+  testing (antennas, etc.).
   * tested with LilyGo TTGO ESP32 LoRa 915MHz, with OLED display
   * Started with the Transmitter and Receiver projects from https://github.com/YogoGit/TTGO-LORA32-V1.0.
     Combined them together, to make transceivers that send and receive the test packets.  Among the
@@ -22,3 +25,6 @@ Various test apps for LoRa testing.  For now, only Arduino IDE-based projects.
   * **TODO** - Clean up code (lots of cruft left from getting to the (almost) finished product
   * **TODO** - (Longer term, if ever) come up with a way to lower packet loss through the use of app-level ACKS,
     or interrupt-driven receives, etc.
+  * **TODO** - Port to LoRa32u4 and test
+  * **TODO** - Port to Adafruit M0 LoRa and test
+  * **TODO** - Port (non-Arduino) to RPi/Adafruit LoRa Hat (RadioFruit?) and test
